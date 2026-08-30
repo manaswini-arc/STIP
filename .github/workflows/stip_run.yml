@@ -1,1 +1,98 @@
+name: Execute STIP Telemetry Validation Stream
 
+on:
+  workflow_dispatch: 
+
+permissions:
+  contents: read
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+
+    - name: Execute Unified Ground Station Logic
+      env:
+        NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      run: |
+        python -c "
+        import threading, time, random, struct, os, requests
+        
+        NTFY_TOPIC = os.getenv('NTFY_TOPIC', 'isro-drdo-26')
+        print('📡 Ground Station Interface Initialized.')
+        
+        class Buffer:
+            def __init__(self):
+                self.b = [None]*5
+                self.h = self.t = 0
+                self.l = threading.Lock()
+            def write(self, p):
+                with self.l:
+                    self.b[self.h] = p
+                    self.h = (self.h + 1) % 5
+                    if self.h == self.t: self.t = (self.t + 1) % 5
+            def read(self):
+                with self.l:
+                    if self.h == self.t: return None
+                    p = self.b[self.t]
+                    self.t = (self.t + 1) % 5
+                    return p
+
+        def sat_tx(buf):
+            print('🚀 Satellite active. Blasting binary frames...')
+            for seq in range(1, 16):
+                if seq == 6:
+                    print('📡 [Simulation] Signal drop encountered at Seq ID: 6')
+                    continue
+                # Forcing sequence frames 10, 11, and 12 to breach bounds to guarantee consecutive fault testing
+                if seq in:
+                    val = random.uniform(39.5, 41.5)
+                else:
+                    val = random.uniform(25.0, 32.0)
+                p = struct.pack('!BIBf', 0xAA, seq, 0x01, val)
+                buf.write(p)
+                time.sleep(0.1)
+
+        shared_buf = Buffer()
+        tx = threading.Thread(target=sat_tx, args=(shared_buf,))
+        tx.start()
+        
+        last_seq = None
+        fault_seq = 0
+        
+        while tx.is_alive() or shared_buf.h != shared_buf.t:
+            p = shared_buf.read()
+            if p is None:
+                time.sleep(0.05)
+                continue
+            sync, seq, sub, val = struct.unpack('!BIBf', p)
+            
+            if last_seq is not None and seq > last_seq + 1:
+                print('⚠️ [WARNING] Data Loss Detected! Missing Frame ID:', last_seq + 1)
+                requests.post(f'https://ntfy.sh{NTFY_TOPIC}', data=f'⚠️ [WARNING]\nData Loss Gaps Detected on Frame: {last_seq + 1}'.encode('utf-8'))
+            
+            if val > 38.0:
+                fault_seq += 1
+                if fault_seq >= 3:
+                    print('🚨 CRITICAL OVERHEATING AT SEQ:', seq)
+                    requests.post(f'https://ntfy.sh{NTFY_TOPIC}', data=f'🚨 [CRITICAL FAULT]\nSatellite Overheating! 3 consecutive breaches logged. Temp: {val:.2f}°C'.encode('utf-8'))
+            else:
+                fault_seq = 0
+                
+            print(f'✅ Parsed Frame -> Seq: {seq} | Subsystem: Thermal | Sensor Temp: {val:.2f}°C')
+            last_seq = seq
+            time.sleep(0.2)
+        "
+        
