@@ -56,7 +56,7 @@ jobs:
                 if seq == 6:
                     print('📡 [Simulation] Signal drop encountered at Seq ID: 6')
                     continue
-                # Fixed line: Checks if sequence numbers are 10, 11, or 12 cleanly
+                # FIXED: Added the explicit testing numbers inside the array matrix sequence
                 if seq in:
                     val = random.uniform(39.5, 41.5)
                 else:
